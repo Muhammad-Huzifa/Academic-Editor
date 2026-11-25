@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+*.zip
+*.jsonl
+*.safetensors
+*.pt
+outputs/
+workspace/
+checkpoints/
