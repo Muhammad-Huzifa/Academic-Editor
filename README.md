@@ -10,7 +10,7 @@ The repository contains source code; make it private before enabling same-reposi
 
 ## 0. Setup (every new Kaggle notebook)
 
-Enable Internet and GPU for generation, training and evaluation. CPU is sufficient for export and merge.
+Enable Internet and GPU for generation, training and evaluation. CPU is sufficient for export and merge. If the repository is private, use the authenticated clone/update cell in the Remote checkpoint backup section instead of the unauthenticated clone below.
 
 ```python
 !git clone https://github.com/Muhammad-Huzifa/Academic-Editor.git /kaggle/working/Academic-Editor
