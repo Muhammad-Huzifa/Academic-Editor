@@ -1,6 +1,6 @@
 """Private GitHub Release backups for full Trainer resume state.
 
-Use a dedicated private repository, initialized with a README.
+Use the existing Academic-Editor repository after making it private.
 Authenticate only through the GITHUB_TOKEN environment variable.
 Never add weights or credentials to Git history.
 """
@@ -13,13 +13,15 @@ import shutil
 import tempfile
 import time
 import zipfile
+import uuid
 from pathlib import Path
 from urllib.parse import quote
 
 import requests
 
 LIMIT = 2 * 1024**3
-DEFAULT_TAG = "academic-editor-v3-checkpoints"
+DEFAULT_REPO = "Muhammad-Huzifa/Academic-Editor"
+DEFAULT_TAG = "academic-editor-v3-final-training"
 
 
 def sha256(path):
@@ -47,13 +49,19 @@ class GitHubBackup:
         })
         info = self.request("GET", self.api).json()
         if not info.get("private"):
-            raise RuntimeError("Refusing to upload training artifacts to a public repository")
+            raise RuntimeError("Repository is public. Open repository Settings > General > Danger Zone > Change repository visibility, make it private, then retry. No checkpoint was uploaded.")
 
     def request(self, method, url, **kwargs):
         kwargs.setdefault("timeout", (20, 180))
         response = self.session.request(method, url, **kwargs)
         if not response.ok:
-            raise RuntimeError(f"GitHub {method} returned HTTP {response.status_code}; verify access, quota and repository settings")
+            hints = {
+                401: "Token invalid or expired; update GITHUB_TOKEN in Kaggle Secrets.",
+                403: "Token lacks access/write permission, or GitHub rate limit reached.",
+                404: "Verify repository name and token access to this repository.",
+                422: "GitHub rejected the request; check release or asset settings.",
+            }
+            raise RuntimeError(f"GitHub {method} returned HTTP {response.status_code}: {hints.get(response.status_code, 'Check network and GitHub status.')}")
         return response
 
     def release(self, create=False):
@@ -114,6 +122,28 @@ class GitHubBackup:
                 if attempt == 2:
                     raise RuntimeError("Remote backup failed; local checkpoint retained") from None
                 time.sleep(5 * (attempt+1))
+
+    def check(self):
+        """Verify actual release-asset upload and authenticated download before training."""
+        release = self.release(create=True)
+        name = "preflight-" + uuid.uuid4().hex + ".txt"
+        payload = b"Academic Editor checkpoint storage preflight"
+        asset = None
+        try:
+            asset = self.request("POST", release["upload_url"].split("{")[0],
+                                 params={"name": name},
+                                 headers={"Content-Type": "text/plain"},
+                                 data=payload).json()
+            if asset.get("state") != "uploaded" or asset.get("size") != len(payload):
+                raise RuntimeError("Preflight asset upload incomplete")
+            received = self.request("GET", self.api + f"/releases/assets/{asset['id']}",
+                                    headers={"Accept": "application/octet-stream"}).content
+            if received != payload:
+                raise RuntimeError("Preflight download did not match uploaded bytes")
+        finally:
+            if asset and asset.get("id"):
+                self.request("DELETE", self.api + f"/releases/assets/{asset['id']}")
+        print("GitHub checkpoint storage verified (upload + download). Release:", self.tag, flush=True)
 
     def save(self, run_dir, final=False):
         run = Path(run_dir).resolve()
@@ -204,7 +234,7 @@ class GitHubBackup:
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("action", choices=["check", "upload", "restore"])
-    p.add_argument("--repo", required=True)
+    p.add_argument("--repo", default=DEFAULT_REPO)
     p.add_argument("--tag", default=DEFAULT_TAG)
     p.add_argument("--run-dir", default="/kaggle/working/academic_editor_training_v3")
     p.add_argument("--asset")
@@ -212,8 +242,7 @@ def main():
     a = p.parse_args()
     backup = GitHubBackup(a.repo, a.tag)
     if a.action == "check":
-        release = backup.release(create=True)
-        print("Private repository accessible; release:", release["tag_name"])
+        backup.check()
     elif a.action == "upload":
         backup.save(a.run_dir, final=a.final)
     else:
