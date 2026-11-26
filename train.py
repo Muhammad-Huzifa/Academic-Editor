@@ -10,7 +10,7 @@ from peft import LoraConfig,get_peft_model,prepare_model_for_kbit_training
 from transformers import Trainer,TrainingArguments,TrainerCallback,EarlyStoppingCallback,set_seed
 from transformers.trainer_utils import get_last_checkpoint
 p=argparse.ArgumentParser()
-p.add_argument('--github-repo', help='Dedicated private repository for checkpoint release assets'); p.add_argument('--github-tag', default='academic-editor-v3-checkpoints');
+p.add_argument('--github-repo', help='Private Academic-Editor repository for checkpoint release assets'); p.add_argument('--github-tag', default='academic-editor-v3-final-training');
 p.add_argument('--dataset-dir',required=True); p.add_argument('--run-dir',default='/kaggle/working/academic_editor_training_v3'); p.add_argument('--resume-from'); p.add_argument('--epochs',type=int,default=20); p.add_argument('--hours',type=float,default=9.5); p.add_argument('--require-human-approval',action='store_true'); a=p.parse_args()
 if not 1<=a.hours<=10 or a.epochs<1: raise ValueError('Invalid training budget')
 run=Path(a.run_dir); run.mkdir(parents=True,exist_ok=True)
@@ -23,8 +23,8 @@ backup=None
 if a.github_repo:
     from github_backup import GitHubBackup
     backup=GitHubBackup(a.github_repo,a.github_tag)
-    backup.release(create=True)
-    print('Private GitHub checkpoint backup enabled',flush=True)
+    backup.check()
+    print('GitHub checkpoint backup enabled',flush=True)
 data=Path(a.dataset_dir); m=json.loads((data/'manifest.json').read_text())
 if m['schema_version']!=3 or m['model_id']!=MODEL_ID: raise ValueError('Dataset schema/model mismatch')
 parts={}
@@ -83,7 +83,9 @@ class RemoteBackup(TrainerCallback):
             try:
                 backup.save(run)
             except Exception as exc:
-                print('WARNING: remote backup failed ('+type(exc).__name__+'); local checkpoint retained. Retry upload before ending session.',flush=True)
+                print('WARNING: remote backup failed ('+type(exc).__name__+'); pausing at the saved local checkpoint.',flush=True)
+                budget.paused=True
+                control.should_training_stop=True
         return control
 trainer=Trainer(model=model,args=args,train_dataset=tr,eval_dataset=va,data_collator=collate,processing_class=tok,callbacks=[EarlyStoppingCallback(early_stopping_patience=4,early_stopping_threshold=.005),budget,RemoteBackup()])
 resume=get_last_checkpoint(str(ckpt))
@@ -97,7 +99,7 @@ if budget.paused:
     if backup is not None:
         try: backup.save(run)
         except Exception as exc: print('WARNING: session-end remote backup failed ('+type(exc).__name__+'); save the local run directory.',flush=True)
-    print('Save full run directory and resume; do not evaluate yet.'); raise SystemExit(0)
+    print('Training paused. Verify the latest remote checkpoint or save the full local run directory before closing Kaggle.'); raise SystemExit(0)
 best=run/'best_lora_adapter'; trainer.save_model(str(best)); tok.save_pretrained(best)
 write_json(run/'training_summary.json',{'best_eval_loss':trainer.state.best_metric,'best_checkpoint':trainer.state.best_model_checkpoint,'epoch':trainer.state.epoch,'steps':trainer.state.global_step})
 shutil.make_archive(str(run/'best_adapter'),'zip',best)
