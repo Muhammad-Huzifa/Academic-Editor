@@ -94,3 +94,33 @@ Use matching approval flags. Compare original and adapted models with identical 
 ## Limitations
 
 Automatic audits use the same teacher model and may miss scientific errors. Human review and license verification remain necessary. Common Pile arXiv is a collection of openly licensed texts, not a guarantee of peer review or writing quality. Counts are targets. Full GPU execution and throughput remain unverified. The editor cannot establish human authorship.
+
+
+## Remote checkpoint backup (optional)
+
+Create a separate private, initialized repository for checkpoint Release assets (for example Academic-Editor-Checkpoints). Grant a fine-grained personal access token Contents read/write permission for that repository, store it in Kaggle Secrets as GITHUB_TOKEN, and load it into the Python process environment without printing it. Do not commit credentials or binary weights.
+
+```python
+import os
+from kaggle_secrets import UserSecretsClient
+os.environ["GITHUB_TOKEN"] = UserSecretsClient().get_secret("GITHUB_TOKEN")
+BACKUP_REPO = "Muhammad-Huzifa/Academic-Editor-Checkpoints"
+```
+
+```python
+!python github_backup.py check --repo "{BACKUP_REPO}"
+!python github_backup.py upload --repo "{BACKUP_REPO}"
+```
+
+The upload command backs up an existing saved checkpoint. If training is already complete, add --final. Run only after the training process has finished writing checkpoints.
+
+In a fresh Kaggle session with the same dataset, dependency versions and run configuration:
+
+```python
+!python github_backup.py restore --repo "{BACKUP_REPO}"
+!python -u train.py --dataset-dir "{DATASET_DIR}" --epochs 20 --hours 9.5 --github-repo "{BACKUP_REPO}"
+```
+
+The restore destination defaults to /kaggle/working/academic_editor_training_v3. It must be empty. Restore only trusted checkpoints from your own repository. If a final asset was restored, evaluate instead of training.
+
+When --github-repo is set, the Trainer attempts remote backup after each checkpoint save and at session stop/completion. Earlier launched processes do not acquire new callbacks until restarted. The release tag defaults to academic-editor-v3-checkpoints; use a distinct --tag / --github-tag for a different experiment. Archive uploads do not overwrite prior verified assets. Each asset must be under 2 GiB. Keep at least the latest verified checkpoint and a previous fallback; periodically remove older assets manually if needed. Upload failures are logged and local state is retained, so confirm a remote upload succeeded before closing Kaggle. Maintain another backup of important final adapters. This is a convenience workflow, not a guaranteed archival storage service.
