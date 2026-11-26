@@ -1,7 +1,7 @@
-"""Private GitHub Release backups for full Trainer resume state.
+"""GitHub Release backups for full Trainer resume state.
 
-Use the existing Academic-Editor repository after making it private.
-Authenticate only through the GITHUB_TOKEN environment variable.
+Public uploads require explicit --allow-public acknowledgement.
+Authenticate writes through GITHUB_TOKEN; public restores can be anonymous.
 Never add weights or credentials to Git history.
 """
 import argparse
@@ -33,23 +33,27 @@ def sha256(path):
 
 
 class GitHubBackup:
-    def __init__(self, repo, tag=DEFAULT_TAG):
+    def __init__(self, repo, tag=DEFAULT_TAG, allow_public=False, read_only=False):
         if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
-            raise ValueError("Expected OWNER/PRIVATE-REPO")
+            raise ValueError("Expected OWNER/REPO")
         self.tag = tag
         self.api = f"https://api.github.com/repos/{repo}"
         token = os.environ.get("GITHUB_TOKEN")
-        if not token:
-            raise RuntimeError("Set GITHUB_TOKEN using Kaggle Secrets")
+        if not token and not read_only:
+            raise RuntimeError("Uploading checkpoints requires GITHUB_TOKEN in Kaggle Secrets, even for a public repository")
         self.session = requests.Session()
         self.session.headers.update({
-            "Authorization": "Bearer " + token,
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         })
+        if token:
+            self.session.headers["Authorization"] = "Bearer " + token
         info = self.request("GET", self.api).json()
-        if not info.get("private"):
-            raise RuntimeError("Repository is public. Open repository Settings > General > Danger Zone > Change repository visibility, make it private, then retry. No checkpoint was uploaded.")
+        self.public = not info.get("private")
+        if self.public and not read_only:
+            if not allow_public:
+                raise RuntimeError("This repository is public. Pass --allow-public only if you intend to publish the trained weights and resume state.")
+            print("WARNING: checkpoint assets will be publicly downloadable. Upload only authorized, non-confidential artifacts.", flush=True)
 
     def request(self, method, url, **kwargs):
         kwargs.setdefault("timeout", (20, 180))
@@ -73,7 +77,7 @@ class GitHubBackup:
             return self.request("POST", self.api + "/releases", json={
                 "tag_name": self.tag,
                 "name": self.tag,
-                "body": "Private training state backups. Keep the newest verified checkpoint and a previous fallback.",
+                "body": ("Public" if self.public else "Private") + " training state backups. Keep the newest verified checkpoint and a previous fallback.",
                 "prerelease": True,
             }).json()
         raise RuntimeError(f"Release lookup HTTP {r.status_code}")
@@ -123,8 +127,20 @@ class GitHubBackup:
                     raise RuntimeError("Remote backup failed; local checkpoint retained") from None
                 time.sleep(5 * (attempt+1))
 
+    def download(self, asset, stream=False):
+        # Public assets can be downloaded without sending credentials.
+        if self.public:
+            response = requests.get(asset["browser_download_url"], stream=stream, timeout=(30, 900))
+            if not response.ok:
+                response.close()
+                raise RuntimeError("Public release asset download failed")
+            return response
+        return self.request("GET", self.api + f"/releases/assets/{asset['id']}",
+                            headers={"Accept": "application/octet-stream"},
+                            stream=stream, timeout=(30, 900))
+
     def check(self):
-        """Verify actual release-asset upload and authenticated download before training."""
+        """Verify actual release-asset upload and download before training."""
         release = self.release(create=True)
         name = "preflight-" + uuid.uuid4().hex + ".txt"
         payload = b"Academic Editor checkpoint storage preflight"
@@ -136,8 +152,8 @@ class GitHubBackup:
                                  data=payload).json()
             if asset.get("state") != "uploaded" or asset.get("size") != len(payload):
                 raise RuntimeError("Preflight asset upload incomplete")
-            received = self.request("GET", self.api + f"/releases/assets/{asset['id']}",
-                                    headers={"Accept": "application/octet-stream"}).content
+            with self.download(asset) as response:
+                received = response.content
             if received != payload:
                 raise RuntimeError("Preflight download did not match uploaded bytes")
         finally:
@@ -209,9 +225,7 @@ class GitHubBackup:
                                        x["name"].startswith("final-"), x["created_at"]))
         with tempfile.TemporaryDirectory(prefix="editor-restore-") as tmp:
             archive = Path(tmp)/a["name"]
-            with self.request("GET", self.api + f"/releases/assets/{a['id']}",
-                              headers={"Accept": "application/octet-stream"},
-                              stream=True, timeout=(30, 900)) as response:
+            with self.download(a, stream=True) as response:
                 with archive.open("wb") as f:
                     for chunk in response.iter_content(1024*1024):
                         f.write(chunk)
@@ -239,8 +253,9 @@ def main():
     p.add_argument("--run-dir", default="/kaggle/working/academic_editor_training_v3")
     p.add_argument("--asset")
     p.add_argument("--final", action="store_true")
+    p.add_argument("--allow-public", action="store_true", help="Explicitly permit publicly downloadable training state")
     a = p.parse_args()
-    backup = GitHubBackup(a.repo, a.tag)
+    backup = GitHubBackup(a.repo, a.tag, allow_public=a.allow_public, read_only=(a.action == "restore"))
     if a.action == "check":
         backup.check()
     elif a.action == "upload":
