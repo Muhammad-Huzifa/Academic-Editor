@@ -6,11 +6,11 @@ Qwen3-4B-Instruct-2507 + QLoRA. Refine author-supplied abstracts, methodology an
 
 `prepare_plan.py` → frozen plan → `run_shard.py` (6 independent partitions) → `merge_shards.py` → `train.py` → `evaluate.py`.
 
-The repository contains source code; make it private before enabling same-repository checkpoint Release backups. Keep unpublished research, datasets and credentials out of Git history. Use authorized compute quotas. Six logical shards support reproducibility and resumability, not quota circumvention.
+The repository contains source code and optionally public checkpoint Release assets. Keep datasets, credentials, and confidential research out of Git history. Publish trained weights only after verifying source permissions and confidentiality. Use authorized compute quotas. Six logical shards support reproducibility and resumability, not quota circumvention.
 
 ## 0. Setup (every new Kaggle notebook)
 
-Enable Internet and GPU for generation, training and evaluation. CPU is sufficient for export and merge. If the repository is private, use the authenticated clone/update cell in the Remote checkpoint backup section instead of the unauthenticated clone below.
+Enable Internet and GPU for generation, training and evaluation. CPU is sufficient for export and merge.
 
 ```python
 !git clone https://github.com/Muhammad-Huzifa/Academic-Editor.git /kaggle/working/Academic-Editor
@@ -96,62 +96,55 @@ Use matching approval flags. Compare original and adapted models with identical 
 Automatic audits use the same teacher model and may miss scientific errors. Human review and license verification remain necessary. Common Pile arXiv is a collection of openly licensed texts, not a guarantee of peer review or writing quality. Counts are targets. Full GPU execution and throughput remain unverified. The editor cannot establish human authorship.
 
 
-## Remote checkpoint backup — existing repository
+## Remote checkpoint backup — existing public repository
 
-Use this same repository, **Muhammad-Huzifa/Academic-Editor**, for code and checkpoint Release assets. No second repository is required. Before backup, change repository visibility to Private in GitHub Settings > General > Danger Zone. The script refuses public repositories. Grant the Kaggle GITHUB_TOKEN Contents read/write access to this repository. Never print or commit the token.
+Use **Muhammad-Huzifa/Academic-Editor** for code and checkpoint Release assets. No second repository or visibility change is required. Public Release assets can be downloaded by anyone, including the full training state and trained adapter. Publish only artifacts derived from authorized, non-confidential data; model weights may memorize training text. Never upload raw datasets or credentials.
 
-In Kaggle, enable GPU and Internet, then load the secret and clone or update the repository with transient authentication:
+Public cloning and restoring do not require authentication. Creating Releases and uploading assets require a GitHub personal access token with Contents read/write access to this repository. Store it as GITHUB_TOKEN in Kaggle Secrets and do not print it. For private repositories, authenticated Git clone and restore are required; omit --allow-public when writing.
+
+In a fresh GPU notebook, enable Internet and use:
 
 ```python
-import os, base64, subprocess
-from pathlib import Path
+!git clone https://github.com/Muhammad-Huzifa/Academic-Editor.git /kaggle/working/Academic-Editor
+%cd /kaggle/working/Academic-Editor
+!pip install -q -r requirements.txt gdown
+```
+
+For an existing checkout use git pull --ff-only instead of cloning.
+
+```python
+import os
 from kaggle_secrets import UserSecretsClient
 
 os.environ["GITHUB_TOKEN"] = UserSecretsClient().get_secret("GITHUB_TOKEN")
 BACKUP_REPO = "Muhammad-Huzifa/Academic-Editor"
 RUN_TAG = "academic-editor-v3-final-training"
-REPO_DIR = Path("/kaggle/working/Academic-Editor")
-
-git_env = os.environ.copy()
-git_env.update({
-    "GIT_CONFIG_COUNT": "1",
-    "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
-    "GIT_CONFIG_VALUE_0": "Authorization: Basic " + base64.b64encode(
-        ("x-access-token:" + os.environ["GITHUB_TOKEN"]).encode()
-    ).decode(),
-    "GIT_TERMINAL_PROMPT": "0",
-})
-if (REPO_DIR / ".git").exists():
-    subprocess.run(["git", "-C", str(REPO_DIR), "pull", "--ff-only"], env=git_env, check=True)
-else:
-    subprocess.run(["git", "clone", "https://github.com/" + BACKUP_REPO + ".git", str(REPO_DIR)], env=git_env, check=True)
-del git_env
-os.chdir(REPO_DIR)
 ```
 
 ```python
-!pip install -q -r requirements.txt gdown
-!python github_backup.py check --repo "{BACKUP_REPO}" --tag "{RUN_TAG}"
+!python github_backup.py check --repo "{BACKUP_REPO}" --tag "{RUN_TAG}" --allow-public
 ```
 
-The check creates a release if needed, uploads a small test file, downloads and checks its contents, and deletes only that test asset. It does not upload model weights. After it succeeds, prepare DATASET_DIR using the original four final dataset files and verify CUDA in PyTorch.
+The check creates a release if needed, uploads a small test asset, verifies its publicly downloaded bytes, and removes only that test asset. After it succeeds, verify PyTorch CUDA and set DATASET_DIR to the original four dataset files.
 
-Fresh training (only if no prior checkpoint for this run):
+For a new run with no prior checkpoint (use a unique tag per experiment):
 
 ```python
-!python -u train.py --dataset-dir "{DATASET_DIR}" --epochs 20 --hours 9.5 --github-repo "{BACKUP_REPO}" --github-tag "{RUN_TAG}"
+!python -u train.py --dataset-dir "{DATASET_DIR}" --epochs 20 --hours 9.5 --github-repo "{BACKUP_REPO}" --github-tag "{RUN_TAG}" --allow-public
 ```
 
-In a new Kaggle session, repeat the setup with identical data and dependency versions, then restore before running the same training command:
+For subsequent Kaggle sessions, repeat the setup with the same data and dependency versions. Restore before executing the same training command:
 
 ```python
 !python -u github_backup.py restore --repo "{BACKUP_REPO}" --tag "{RUN_TAG}"
 ```
 
-The restore destination defaults to /kaggle/working/academic_editor_training_v3 and must be empty. If training is already complete, evaluate instead. Restore only trusted checkpoints from your own repository. Use a unique run tag for a genuinely new experiment. To upload a saved local checkpoint after a failed backup (after training stops), run:
+Restore downloads the most recent uploaded archive and checks its size and checksum. Public restore can be used without a token, but continuing remote backups requires a token. The destination defaults to /kaggle/working/academic_editor_training_v3 and must be empty. Restore only trusted checkpoints from your own repository; optimizer and RNG states contain serialized objects. If training is complete, evaluate instead.
+
+If an upload failed, after training stops retry with:
 
 ```python
-!python -u github_backup.py upload --repo "{BACKUP_REPO}" --tag "{RUN_TAG}"
+!python -u github_backup.py upload --repo "{BACKUP_REPO}" --tag "{RUN_TAG}" --allow-public
 ```
 
-Add --final if training is complete. Checkpoints include the latest full Trainer state, best checkpoint and training configuration. Local checkpoint saves occur every 105 optimizer steps for the current 1,676-example dataset (half an epoch); remote backup happens after each save, at planned session pause, and on completion. If upload fails during training, training pauses at the local checkpoint. Abrupt termination may still lose work since the latest successful backup. Each GitHub asset must be under 2 GiB. Older verified assets are not automatically deleted; periodically retain the latest plus a fallback and preserve the final adapter elsewhere. Actual cloud upload and GPU resumption must be tested in Kaggle.
+Add --final if training is complete. Each backup contains the latest full Trainer checkpoint, best checkpoint and run configuration. Local checkpoints are saved every 105 optimizer steps for the 1,676-example training set, with uploads after saves, planned pause and completion. Failed upload pauses training at the local checkpoint. An unexpected termination can lose progress since the last successful upload. Each asset must be smaller than 2 GiB. Retain at least the latest verified backup and a fallback; older assets are not automatically deleted. Use another durable copy of important final adapters. Actual cloud uploads and GPU resumption still require Kaggle verification.
