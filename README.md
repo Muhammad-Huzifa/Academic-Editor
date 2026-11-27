@@ -2,7 +2,11 @@
 
 Qwen3-4B-Instruct-2507 + QLoRA. Refine author-supplied abstracts, methodology and results without modifying scientific facts, component roles, numbers, citations or uncertainty. The goal is precise and natural scientific prose, not AI-detector evasion.
 
-## Project workflow
+## V4 — scientific writing research pilot
+
+The new [V4 workflow](v4/README.md) is isolated from the completed V3 baseline below. Begin with paper metadata discovery and rights review; do not launch GPU training before the reviewed dataset is frozen. V4 has its own dataset schema, trainer, evaluation and release tag.
+
+## V3 project workflow
 
 `prepare_plan.py` → frozen plan → `run_shard.py` (6 independent partitions) → `merge_shards.py` → `train.py` → `evaluate.py`.
 
