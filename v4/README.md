@@ -34,4 +34,36 @@ If already cloned, use `git pull --ff-only origin main` instead. The discovery c
 
 Use a unique run directory and tag for each experiment, e.g. `academic-editor-v4-pilot-sft`. Root `github_backup.py` requires explicit --run-dir and --tag for V4. Never restore V3 state into V4. Public releases are only appropriate for weights from non-confidential authorized sources; private work requires private authorized storage. Use one sequential trainer per run and only authorized compute quota. Keep exact code revision, dataset hashes, dependency versions and configuration for resume.
 
-Status: discovery and pilot intake first; external dataset adapters, expert preference annotations, DPO and production deployment are gated on inspecting the actual sources and pilot outcomes. No training data has been approved by creating these files.
+Status: discovery, pilot intake, SFT and baseline evaluation scripts implemented; external dataset adapters, expert preference annotations, DPO and production deployment are gated on inspecting actual sources and pilot outcomes. No training data has been approved by creating these files.
+
+## After pilot approval (do not run yet)
+
+Use a fresh run directory and release tag for each experiment. For a fully authorized public-data pilot, the familiar four-cell Kaggle workflow will be:
+
+1. Connect GitHub via Kaggle Secret `GITHUB_TOKEN`.
+2. Clone the repository at the frozen commit; install `requirements.txt` and record resolved package versions.
+3. Download the frozen reviewed V4 dataset from authorized storage; on subsequent sessions restore using the V4 tag and run directory below.
+4. Start or resume training with the identical dataset, code, environment and training configuration.
+
+```bash
+# Storage preflight (public data and trained artifacts only)
+python github_backup.py check --repo Muhammad-Huzifa/Academic-Editor --tag academic-editor-v4-pilot-sft --allow-public
+
+# Subsequent session only; skip for the first run. Restore into an empty directory.
+python -u github_backup.py restore --repo Muhammad-Huzifa/Academic-Editor --tag academic-editor-v4-pilot-sft --run-dir /kaggle/working/academic_editor_training_v4
+
+# After human review, task coverage, leakage audit and frozen dataset approval
+python -u v4/train.py --dataset-dir /kaggle/working/editor_v4_pilot --approve-pilot --epochs 8 --hours 9.5 --github-repo Muhammad-Huzifa/Academic-Editor --github-tag academic-editor-v4-pilot-sft --allow-public
+
+# Completed run only
+python -u v4/evaluate.py --dataset-dir /kaggle/working/editor_v4_pilot
+# Optionally add --v3-adapter /path/to/v3/best_lora_adapter
+```
+
+The trainer refuses public checkpoint uploads unless each record carries a positive public-release attestation and the dataset manifest agrees. This is a procedural gate, not legal clearance. For confidential author examples use authorized private storage and omit public upload flags; never place private materials in public releases.
+
+The SFT pilot uses rank 16, LR 2e-5, 4096-token maximum, gradient accumulation 8, early stopping and automatic full-state backup. These are starting settings, not selected optimal hyperparameters. The evaluation script includes an exact-copy baseline, original base, V4 and optional V3, task metrics and randomized blind review sheets. Evaluation on independent author drafts and stronger prompted baselines is still needed before accepting V4. No DPO trainer is provided until real preference annotations are available.
+
+## Self-test
+
+`python v4/self_test.py` checks the local record validation, a generated fixture dataset and paper-disjoint split. It requires no GPU or downloaded papers. Run it before the first discovery session. This does not validate actual corpus rights or run the GPU trainer.
